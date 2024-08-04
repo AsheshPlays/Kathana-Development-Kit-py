@@ -1,62 +1,44 @@
 import sys
 import os
 import shutil
+import time
+
 import openpyxl
 import stat
-import logging
 import asyncio
 import aiofiles
-from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFileDialog, QSizePolicy, QTextEdit, QSpacerItem, QMessageBox, QTabWidget
-from PyQt6.QtGui import QPixmap, QIcon, QPalette, QColor, QFont, QPainter, QPolygon
-from PyQt6.QtCore import Qt, QProcess, QThread, pyqtSignal, QPoint
+from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget, QMessageBox, QSizePolicy, QProgressBar
+from PyQt6.QtGui import QPixmap, QIcon, QFont
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from openpyxl import Workbook
-from concurrent.futures import ThreadPoolExecutor
+import logging
 from datetime import timedelta
-import time
-import pygame
 
-# Initialize pygame for sound
-try:
-    pygame.mixer.init()
-    pygame_initialized = True
-except pygame.error as e:
-    print(f"Error initializing pygame mixer: {e}")
-    pygame_initialized = False
+# Initialize logging
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger()
 
 # Define the base path to resource files
 def resource_path(relative_path):
     """ Get the absolute path to the resource, works for dev and for PyInstaller """
     try:
-        # PyInstaller creates a temp folder and stores path in _MEIPASS
         base_path = sys._MEIPASS
     except Exception:
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
 # Load resources
-try:
-    startup_sound = resource_path('startup.wav')
-    hover_sound = resource_path('hover.mp3')
-    click_sound = resource_path('click.mp3')
-    done_sound = resource_path('done.mp3')
-    processing_sound = resource_path('processing.mp3')
-    icon_path = resource_path('asheshicon.png')
-    banner_path = resource_path('asheshdevkitbanner.png')
-except Exception as e:
-    print(f"Error loading resources: {e}")
+icon_path = resource_path('asheshicon.png')
+banner_path = resource_path('asheshdevkitbanner.png')
 
 # Project Constants
 KATHANA_DISPLAY_NAMES = ["Kathana Global", "Kathana 2", "Kathana 3", "Kathana 3.2", "Kathana 4", "Kathana 5.2", "Kathana 6"]
 KATHANA_VERSIONS = [r"B:\\Kathana\\Kathana-Global", r"B:\\Kathana\\Kathana2", r"B:\\Kathana\\Kathana3", r"B:\\Kathana\\Kathana3.2", r"B:\\Kathana\\Kathana4", r"B:\\Kathana\\Kathana5.2", r"B:\\Kathana\\Kathana6"]
 
-LOG_XLSX_FILENAME = "KathanaLogs.xlsx"
+LOG_XLSX_FILENAME = "KATHANA_LOGS.xlsx"
 LOG_XLSX_PATH = os.path.join(os.getcwd(), LOG_XLSX_FILENAME)
 ENTITY_XLSX_PATH = r"B:\\Kathana\\Kathana_Entity_PS.xlsx"
 NOESIS_EXE_PATH = r"B:\\Kathana\\_Noesis\\Noesis.exe"
-
-# Initialize logging
-logging.basicConfig(level=logging.DEBUG, format='%(message)s')
-logger = logging.getLogger()
 
 def initialize_log_workbook():
     """Initialize the log workbook with sheets for error and success logs."""
@@ -81,33 +63,57 @@ error_log_ws = wb_log['ERROR_LOGS']
 success_log_ws = wb_log['SUCCESS_LOGS']
 
 def log_error(message):
-    """Log error messages to both the console and the log workbook."""
+    """Log error messages to the log workbook."""
     logger.error(message)
     error_log_ws.append([message])
     wb_log.save(LOG_XLSX_PATH)
 
 def log_success(message):
-    """Log success messages to both the console and the log workbook."""
+    """Log success messages to the log workbook."""
     logger.info(message)
     success_log_ws.append([message])
     wb_log.save(LOG_XLSX_PATH)
 
-async def copy_file_async(src_file, dest_file, semaphore):
+class Worker(QThread):
+    """Worker thread to handle tasks in the background."""
+    progress_signal = pyqtSignal(int)
+    error_signal = pyqtSignal(str)
+    finished = pyqtSignal()
+
+    def __init__(self, task, *args, **kwargs):
+        super().__init__()
+        self.task = task
+        self.args = args
+        self.kwargs = kwargs
+
+    def run(self):
+        try:
+            self.task(*self.args, **self.kwargs, progress_callback=self.update_progress)
+        except Exception as e:
+            self.error_signal.emit(str(e))
+        self.finished.emit()
+
+    def update_progress(self, progress_value):
+        self.progress_signal.emit(progress_value)
+
+async def copy_file_async(src_file, dest_file, semaphore, progress_callback=None):
     """Asynchronously copy files with a semaphore to limit concurrency."""
-    logger.debug(f"Attempting to copy from {src_file} to {dest_file}")
     async with semaphore:
-        if os.path.isfile(src_file):
-            try:
+        try:
+            if os.path.isfile(src_file):
                 async with aiofiles.open(src_file, 'rb') as src, aiofiles.open(dest_file, 'wb') as dest:
                     await dest.write(await src.read())
                 os.chmod(dest_file, stat.S_IWRITE)
                 log_success(f"Copied {src_file} to {dest_file}")
-            except Exception as e:
-                log_error(f"Error copying {src_file} to {dest_file}: {e}")
-        else:
-            log_error(f"File not found: {src_file}")
+            else:
+                log_error(f"File not found: {src_file}")
+        except Exception as e:
+            log_error(f"Error copying {src_file} to {dest_file}: {e}")
 
-async def copy_entity_files(workbook, version_path, entity_type):
+        if progress_callback:
+            progress_callback(1)
+
+async def copy_entity_files(workbook, version_path, entity_type, progress_callback=None):
     """Copy and sort entity files based on the workbook and entity type."""
     logger.debug(f"Starting copy_entity_files with version_path: {version_path}, entity_type: {entity_type}")
     sheet_name = entity_type
@@ -120,6 +126,8 @@ async def copy_entity_files(workbook, version_path, entity_type):
     ws = workbook[sheet_name]
     semaphore = asyncio.Semaphore(50)
     tasks = []
+    total_files = sum(1 for row in ws.iter_rows(min_row=2, values_only=True) for cell in row[2:] if cell)  # Count all files to be copied
+    copied_files = 0
 
     for row in ws.iter_rows(min_row=2, values_only=True):
         entity_id = row[0]
@@ -137,7 +145,7 @@ async def copy_entity_files(workbook, version_path, entity_type):
             if mesh_file:
                 src_file = os.path.join(version_path, "resource", "object", entity_type, "Mesh", mesh_file)
                 dest_file = os.path.join(dest_dir, mesh_file)
-                tasks.append(copy_file_async(src_file, dest_file, semaphore))
+                tasks.append(copy_file_async(src_file, dest_file, semaphore, progress_callback))
                 files_copied = True
 
         # Copy Animation files
@@ -145,7 +153,7 @@ async def copy_entity_files(workbook, version_path, entity_type):
             if ani_file:
                 src_file = os.path.join(version_path, "resource", "object", entity_type, "Ani", ani_file)
                 dest_file = os.path.join(dest_dir, ani_file)
-                tasks.append(copy_file_async(src_file, dest_file, semaphore))
+                tasks.append(copy_file_async(src_file, dest_file, semaphore, progress_callback))
                 files_copied = True
 
         if not files_copied:
@@ -154,7 +162,7 @@ async def copy_entity_files(workbook, version_path, entity_type):
 
     await asyncio.gather(*tasks)
 
-def copy_and_sort_files(version_path, entity_type):
+def copy_and_sort_files(version_path, entity_type, progress_callback=None):
     """Copy and sort files for a specific entity type."""
     logger.debug(f"Initiating copy_and_sort_files for {entity_type} from {version_path}")
     logger.info(f"Copying and sorting {entity_type} files from {version_path}...")
@@ -162,21 +170,35 @@ def copy_and_sort_files(version_path, entity_type):
 
     start_time = time.time()
 
-    with ThreadPoolExecutor(max_workers=100) as executor:
-        future = executor.submit(asyncio.run, copy_entity_files(wb, version_path, entity_type))
-        future.result()
+    asyncio.run(copy_entity_files(wb, version_path, entity_type, progress_callback=progress_callback))
 
     end_time = time.time()
     elapsed_time = end_time - start_time
     logger.info(f"{entity_type} files copied and sorted. Time elapsed: {str(timedelta(seconds=elapsed_time))}")
 
-def copy_and_sort_all_files(version_path):
+def copy_and_sort_all_files(version_path, progress_callback=None):
     """Copy and sort files for all entity types."""
-    copy_and_sort_files(version_path, 'PC')
-    copy_and_sort_files(version_path, 'NPC')
-    copy_and_sort_files(version_path, 'Monster')
+    copy_and_sort_files(version_path, 'PC', progress_callback=progress_callback)
+    copy_and_sort_files(version_path, 'NPC', progress_callback=progress_callback)
+    copy_and_sort_files(version_path, 'Monster', progress_callback=progress_callback)
 
-def generate_fbx_files(version_path, entity_type, generate_batch_only=False, combined_batch=False, batch_commands=[]):
+def generate_combined_fbx_batch_file(version_path, progress_callback=None):
+    """Generate a combined FBX batch file for all entity types."""
+    logger.debug(f"Generating combined FBX batch file for {version_path}")
+    batch_commands = []
+    generate_fbx_files(version_path, 'PC', batch_commands=batch_commands, progress_callback=progress_callback)
+    generate_fbx_files(version_path, 'NPC', batch_commands=batch_commands, progress_callback=progress_callback)
+    generate_fbx_files(version_path, 'Monster', batch_commands=batch_commands, progress_callback=progress_callback)
+
+    combined_batch_file_path = os.path.join(r"B:\\Kathana-Out\\Sorted", os.path.basename(version_path), "generate_all_fbx.bat")
+
+    with open(combined_batch_file_path, 'w') as batch_file:
+        for command in batch_commands:
+            batch_file.write(command + '\n')
+
+    logger.info(f"Combined batch script for generating all entity FBX files created at {combined_batch_file_path}")
+
+def generate_fbx_files(version_path, entity_type, batch_commands=[], progress_callback=None, generate_batch_only=False):
     """Generate FBX files for a specific entity type."""
     logger.debug(f"Generating FBX files for {entity_type} from {version_path}")
     logger.info(f"Generating {entity_type} FBX files from {version_path}...")
@@ -185,19 +207,7 @@ def generate_fbx_files(version_path, entity_type, generate_batch_only=False, com
     fbx_base_dir = os.path.join(r"B:\\Kathana-Out\\FBX", os.path.basename(version_path), entity_type)
     ensure_directory_exists(fbx_base_dir)
 
-    if combined_batch:
-        for root, dirs, files in os.walk(root_dir):
-            for file in files:
-                if file.endswith(".tmb"):
-                    tmb_path = os.path.join(root, file)
-                    tab_files = [f for f in files if f.endswith(".tab")]
-                    for tab_file in tab_files:
-                        tab_path = os.path.join(root, tab_file)
-                        output_file = os.path.join(fbx_base_dir, os.path.relpath(tab_path, root_dir)).replace(".tab", ".fbx")
-                        ensure_directory_exists(os.path.dirname(output_file))
-                        command = f'"{NOESIS_EXE_PATH}" ?cmode "{tmb_path}" "{output_file}" -loadanimsingle "{tab_path}" -export -bakeanimscale -showstats -animbonenamematch -fbxnoextraframe'
-                        batch_commands.append(command)
-    else:
+    if generate_batch_only:
         batch_file_path = os.path.join(root_dir, f"generate_{entity_type.lower()}_fbx.bat")
 
         # Ensure the directory for the batch file exists
@@ -213,29 +223,13 @@ def generate_fbx_files(version_path, entity_type, generate_batch_only=False, com
                             tab_path = os.path.join(root, tab_file)
                             output_file = os.path.join(fbx_base_dir, os.path.relpath(tab_path, root_dir)).replace(".tab", ".fbx")
                             ensure_directory_exists(os.path.dirname(output_file))
-                            command = f'"{NOESIS_EXE_PATH}" ?cmode "{tmb_path}" "{output_file}" -loadanimsingle "{tab_path}" -bakeanimscale -fbxnoextraframe'
+                            command = f'"{NOESIS_EXE_PATH}" ?cmode "{tmb_path}" "{output_file}" -loadanimsingle "{tab_path}" -export -bakeanimscale -showstats -animbonenamematch -fbxnoextraframe'
                             batch_file.write(command + '\n')
 
         logger.info(f"Batch script for generating {entity_type} FBX files created at {batch_file_path}")
-        if not generate_batch_only:
-            os.system(f'cmd /c "{batch_file_path}"')
-            logger.info(f"{entity_type} FBX files generation complete.")
-
-def generate_combined_fbx_batch_file(version_path):
-    """Generate a combined FBX batch file for all entity types."""
-    logger.debug(f"Generating combined FBX batch file for {version_path}")
-    batch_commands = []
-    generate_fbx_files(version_path, 'PC', generate_batch_only=True, combined_batch=True, batch_commands=batch_commands)
-    generate_fbx_files(version_path, 'NPC', generate_batch_only=True, combined_batch=True, batch_commands=batch_commands)
-    generate_fbx_files(version_path, 'Monster', generate_batch_only=True, combined_batch=True, batch_commands=batch_commands)
-
-    combined_batch_file_path = os.path.join(r"B:\\Kathana-Out\\Sorted", os.path.basename(version_path), "generate_all_fbx.bat")
-
-    with open(combined_batch_file_path, 'w') as batch_file:
-        for command in batch_commands:
-            batch_file.write(command + '\n')
-
-    logger.info(f"Combined batch script for generating all entity FBX files created at {combined_batch_file_path}")
+    else:
+        if progress_callback:
+            progress_callback(1)
 
 def clean_up():
     """Clean up the generated files and directories."""
@@ -244,114 +238,22 @@ def clean_up():
     fbx_path = r"B:\\Kathana-Out\\FBX"
     if os.path.exists(sorted_path):
         shutil.rmtree(sorted_path)
-        logger.info("Cleaned up the Sorted Res Out folder")
+        logger.info("Cleaned up the kathana-res-sorted folder")
     else:
-        logger.info("Sorted Res Out folder does not exist")
+        logger.info("kathana-res-sorted folder does not exist")
     if os.path.exists(fbx_path):
         shutil.rmtree(fbx_path)
-        logger.info("Cleaned up the FBX Out folder")
+        logger.info("Cleaned up the kathana-res-fbx folder")
     else:
-        logger.info("FBX Out folder des not exist")
-
-class Worker(QThread):
-    """Worker thread to handle tasks in the background."""
-    progress = pyqtSignal(int)
-    output = pyqtSignal(str)
-    error = pyqtSignal(str)
-    finished = pyqtSignal()
-
-    def __init__(self, task, *args, **kwargs):
-        super().__init__()
-        self.task = task
-        self.args = args
-        self.kwargs = kwargs
-
-    def run(self):
-        try:
-            self.task(*self.args, **self.kwargs)
-        except Exception as e:
-            self.error.emit(str(e))
-        self.finished.emit()
-
-class SoundButton(QPushButton):
-    """Custom button with sound effects and rounded corners."""
-    def __init__(self, label, hover_sound, click_sound, parent=None):
-        super().__init__(label, parent)
-        self.hover_sound = hover_sound
-        self.click_sound = click_sound
-        self.setStyleSheet("""
-            QPushButton {
-                background-color: maroon;
-                color: white;
-                border: 2px solid red;
-                height: 30px;  /* Button height */
-                border-radius: 10px;  /* Rounded corners */
-                transition: transform 0.2s;
-            }
-            QPushButton:hover {
-                background-color: red;
-                transform: scale(1.05);  /* Zoom effect */
-            }
-            QPushButton:pressed {
-                background-color: darkred;
-            }
-        """)
-
-        # Load sounds
-        if pygame_initialized:
-            try:
-                self.hover_sound_effect = pygame.mixer.Sound(self.hover_sound)
-                self.click_sound_effect = pygame.mixer.Sound(self.click_sound)
-            except pygame.error as e:
-                logger.error(f"Error loading sound: {e}")
-                self.hover_sound_effect = None
-                self.click_sound_effect = None
-        else:
-            self.hover_sound_effect = None
-            self.click_sound_effect = None
-
-    def enterEvent(self, event):
-        if self.hover_sound_effect:
-            self.hover_sound_effect.play()
-        super().enterEvent(event)
-
-    def mousePressEvent(self, event):
-        if self.click_sound_effect:
-            self.click_sound_effect.play()
-        super().mousePressEvent(event)
-
-class SignalHandler(logging.Handler):
-    """Custom logging handler to emit log records to a Qt signal."""
-    def __init__(self, signal):
-        super().__init__()
-        self.signal = signal
-
-    def emit(self, record):
-        log_entry = self.format(record)
-        self.signal.emit(log_entry)
+        logger.info("kathana-res-fbx folder does not exist")
 
 class KathanaVersionTool(QWidget):
     """Main application window for the Kathana Version Tool."""
-    append_log = pyqtSignal(str)
 
     def __init__(self):
         super().__init__()
-        self.process = QProcess(self)
+        self.worker = None
         self.initUI()
-
-        self.logger = logging.getLogger()
-        self.logger.setLevel(logging.DEBUG)
-        handler = SignalHandler(self.append_log)
-        handler.setFormatter(logging.Formatter('%(message)s'))
-        self.logger.addHandler(handler)
-        self.append_log.connect(self.append_output)
-
-        # Play startup sound
-        if pygame_initialized:
-            try:
-                pygame.mixer.Sound(startup_sound).play()
-            except pygame.error as e:
-                logger.error(f"Error playing startup sound: {e}")
 
     def initUI(self):
         """Initialize the user interface."""
@@ -376,66 +278,24 @@ class KathanaVersionTool(QWidget):
             self.tab_widget.addTab(tab, version_name)
         layout.addWidget(self.tab_widget)
 
-        console_section_layout = QVBoxLayout()
-
-        console_label = QLabel('Console')
-        console_label.setFont(QFont("Dotum", 10, QFont.Weight.Bold))
-        console_section_layout.addWidget(console_label)
-
-        self.progress_label = QLabel('')
-        self.progress_label.setFont(QFont("Dotum", 10))
-        console_section_layout.addWidget(self.progress_label)
-
-        console_layout = QHBoxLayout()
-
-        self.console_output = QTextEdit()
-        self.console_output.setReadOnly(True)
-        console_palette = self.console_output.palette()
-        console_palette.setColor(QPalette.ColorRole.Base, QColor(100, 100, 100, 180))  # Darker gray with transparency
-        self.console_output.setPalette(console_palette)
-        self.console_output.setFixedHeight(150)  # Adjust console height
-        console_layout.addWidget(self.console_output)
-
-        console_buttons_layout = QVBoxLayout()
-        clear_console_btn = SoundButton('Clear \nConsole', hover_sound, click_sound, self)
-        clear_console_btn.setStyleSheet("""
-            QPushButton {
-                background-color: red;
-                color: white;
-                border: 2px solid darkred;
-                border-radius: 10px;
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                border: 2px solid grey;
+                border-radius: 5px;
+                text-align: center;
             }
-            QPushButton:hover {
-                background-color: darkred;
+
+            QProgressBar::chunk {
+                background-color: orange;
+                width: 20px;
             }
         """)
-        clear_console_btn.setFont(QFont("Dotum", 10))
-        clear_console_btn.clicked.connect(self.clear_console)
-        clear_console_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        clear_console_btn.setFixedWidth(150)
-        clear_console_btn.setFixedHeight(150)
-        console_buttons_layout.addWidget(clear_console_btn)
-
-        console_layout.addLayout(console_buttons_layout)
-        console_section_layout.addLayout(console_layout)
-        layout.addLayout(console_section_layout)
-
-        author_version_layout = QHBoxLayout()
-        author_label = QLabel('Ashesh Development © 2024')
-        author_label.setFont(QFont("Dotum", 8))
-        version_label = QLabel('Version: 2.0.1')
-        version_label.setFont(QFont("Dotum", 8))
-        author_version_layout.addWidget(author_label)
-        author_version_layout.addSpacerItem(QSpacerItem(40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum))
-        author_version_layout.addWidget(version_label)
-        layout.addLayout(author_version_layout)
+        self.progress_bar.setMaximum(100)
+        self.progress_bar.setValue(0)
+        layout.addWidget(self.progress_bar)
 
         self.setLayout(layout)
-
-        self.process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
-        self.process.readyReadStandardOutput.connect(self.on_readyReadStandardOutput)
-        self.process.readyReadStandardError.connect(self.on_readyReadStandardError)
-        self.process.finished.connect(self.on_task_finished)
 
     def create_version_tab(self, version_name, version_path):
         """Create a tab for a specific Kathana version."""
@@ -490,33 +350,16 @@ class KathanaVersionTool(QWidget):
         """Add a row of buttons to the specified layout."""
         for label, entity_type, *batch_only in buttons:
             if label == 'Clean Up':
-                button = SoundButton(label, hover_sound, click_sound)
+                button = QPushButton(label)
                 button.clicked.connect(self.confirm_clean_up)
-                button.setStyleSheet("""
-                    QPushButton {
-                        background-color: darkpurple;
-                        color: white;
-                        border: 2px solid red;
-                        height: 30px;  /* Button height */
-                        border-radius: 10px;  /* Rounded corners */
-                        transition: transform 0.2s;
-                    }
-                    QPushButton:hover {
-                        background-color: purple;
-                        transform: scale(1.05);  /* Zoom effect */
-                    }
-                    QPushButton:pressed {
-                        background-color: darkred;
-                    }
-                """)
             elif label == 'Stop':
-                button = SoundButton(label, hover_sound, click_sound)
+                button = QPushButton(label)
                 button.clicked.connect(self.stop_processes)
             elif label == 'Refresh':
-                button = SoundButton(label, hover_sound, click_sound)
+                button = QPushButton(label)
                 button.clicked.connect(self.restart_application)
             else:
-                button = SoundButton(label, hover_sound, click_sound)
+                button = QPushButton(label)
                 button.clicked.connect(lambda _, v=version_path, e=entity_type, b=batch_only: self.run_task(v, e, *b))
             button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
             parent_layout.addWidget(button)
@@ -531,90 +374,50 @@ class KathanaVersionTool(QWidget):
 
     def run_task(self, version_path, entity_type, generate_batch_only=False):
         """Run a task to copy and sort files or generate FBX files."""
-        self.start_processing_sound()
+        self.progress_bar.setValue(0)
+
+        progress_callback = self.update_progress
+
         if entity_type == 'All':
-            self.worker = Worker(copy_and_sort_all_files, version_path)
+            self.worker = Worker(copy_and_sort_all_files, version_path, progress_callback=progress_callback)
         elif entity_type is None:
-            self.worker = Worker(generate_combined_fbx_batch_file, version_path)
+            self.worker = Worker(generate_combined_fbx_batch_file, version_path, progress_callback=progress_callback)
         elif generate_batch_only:
-            self.worker = Worker(generate_fbx_files, version_path, entity_type, generate_batch_only)
+            self.worker = Worker(generate_fbx_files, version_path, entity_type, batch_commands=[], progress_callback=progress_callback, generate_batch_only=True)
         else:
-            self.worker = Worker(copy_and_sort_files, version_path, entity_type)
-        self.worker.output.connect(self.append_output)
-        self.worker.error.connect(self.append_error)
+            self.worker = Worker(copy_and_sort_files, version_path, entity_type, progress_callback=progress_callback)
+
+        self.worker.progress_signal.connect(self.update_progress)
+        self.worker.error_signal.connect(self.display_error)
         self.worker.finished.connect(self.on_task_finished)
         self.worker.start()
 
-    def clean_up(self):
-        """Run a task to clean up generated files."""
-        self.start_processing_sound()
-        self.worker = Worker(clean_up)
-        self.worker.output.connect(self.append_output)
-        self.worker.error.connect(self.append_error)
-        self.worker.finished.connect(self.on_task_finished)
-        self.worker.start()
-        QMessageBox.information(self, 'Clean Up', 'Clean up process has been completed.')
+    def update_progress(self, progress_value):
+        """Update the progress bar."""
+        self.progress_bar.setValue(progress_value)
+
+    def display_error(self, error_message):
+        """Display error messages."""
+        QMessageBox.critical(self, 'Error', error_message)
+
+    def on_task_finished(self):
+        """Handle task finished event."""
+        self.progress_bar.setValue(100)
+        QMessageBox.information(self, 'Task Finished', 'The task has been completed successfully.')
+        self.progress_bar.setValue(0)
 
     def stop_processes(self):
         """Stop all running processes."""
-        self.process.kill()
-        self.append_output('Process Stopped: All running processes have been stopped.')
+        if self.worker and self.worker.isRunning():
+            self.worker.terminate()
+            self.worker.wait()
+            self.progress_bar.setValue(0)
+            QMessageBox.information(self, 'Process Stopped', 'All running processes have been stopped.')
 
     def restart_application(self):
         """Restart the application."""
         QApplication.quit()
         os.execl(sys.executable, sys.executable, *sys.argv)
-
-    def clear_console(self):
-        """Clear the console output."""
-        self.console_output.clear()
-
-    def append_output(self, text):
-        """Append output text to the console."""
-        self.console_output.setTextColor(QColor("orange"))
-        self.console_output.append(text)
-        self.console_output.setTextColor(QColor("black"))
-
-    def append_error(self, text):
-        """Append error text to the console."""
-        self.console_output.setTextColor(QColor("red"))
-        self.console_output.append(f"ERROR: {text}")
-        self.console_output.setTextColor(QColor("black"))
-
-    def on_task_finished(self):
-        """Handle task finished event."""
-        self.stop_processing_sound()
-        self.console_output.setTextColor(QColor("green"))
-        self.console_output.append("Task Finished: The task has been completed successfully.")
-        self.console_output.setTextColor(QColor("black"))
-        if pygame_initialized:
-            try:
-                pygame.mixer.Sound(done_sound).play()
-            except pygame.error as e:
-                logger.error(f"Error playing done sound: {e}")
-
-    def on_readyReadStandardOutput(self):
-        """Handle ready read standard output event."""
-        text = self.process.readAllStandardOutput().data().decode()
-        self.append_output(text)
-
-    def on_readyReadStandardError(self):
-        """Handle ready read standard error event."""
-        text = self.process.readAllStandardError().data().decode()
-        self.append_error(text)
-
-    def start_processing_sound(self):
-        """Start the processing sound."""
-        if pygame_initialized:
-            try:
-                pygame.mixer.Sound(processing_sound).play()
-            except pygame.error as e:
-                logger.error(f"Error playing processing sound: {e}")
-
-    def stop_processing_sound(self):
-        """Stop the processing sound."""
-        if pygame_initialized:
-            pygame.mixer.stop()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
