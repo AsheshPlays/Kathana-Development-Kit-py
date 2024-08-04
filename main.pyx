@@ -6,7 +6,7 @@ import stat
 import logging
 import asyncio
 import aiofiles
-from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFileDialog, QSizePolicy, QTextEdit, QSpacerItem, QMessageBox, QTabWidget
+from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFileDialog, QSizePolicy, QTextEdit, QSpacerItem, QMessageBox
 from PyQt6.QtGui import QPixmap, QIcon, QPalette, QColor, QFont, QPainter, QPolygon
 from PyQt6.QtCore import Qt, QProcess, QThread, pyqtSignal, QPoint
 from openpyxl import Workbook
@@ -16,12 +16,7 @@ import time
 import pygame
 
 # Initialize pygame for sound
-try:
-    pygame.mixer.init()
-    pygame_initialized = True
-except pygame.error as e:
-    print(f"Error initializing pygame mixer: {e}")
-    pygame_initialized = False
+pygame.mixer.init()
 
 # Define the base path to resource files
 def resource_path(relative_path):
@@ -34,22 +29,22 @@ def resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 # Load resources
-try:
-    startup_sound = resource_path('startup.wav')
-    hover_sound = resource_path('hover.mp3')
-    click_sound = resource_path('click.mp3')
-    done_sound = resource_path('done.mp3')
-    processing_sound = resource_path('processing.mp3')
-    icon_path = resource_path('asheshicon.png')
-    banner_path = resource_path('asheshdevkitbanner.png')
-except Exception as e:
-    print(f"Error loading resources: {e}")
+startup_sound = resource_path('startup.wav')
+hover_sound = resource_path('hover.mp3')
+click_sound = resource_path('click.mp3')
+done_sound = resource_path('done.mp3')
+processing_sound = resource_path('processing.mp3')
+icon_path = resource_path('asheshicon.png')
+banner_path = resource_path('asheshdevkitbanner.png')
 
 # Project Constants
-KATHANA_DISPLAY_NAMES = ["Kathana Global", "Kathana 2", "Kathana 3", "Kathana 3.2", "Kathana 4", "Kathana 5.2", "Kathana 6"]
-KATHANA_VERSIONS = [r"B:\\Kathana\\Kathana-Global", r"B:\\Kathana\\Kathana2", r"B:\\Kathana\\Kathana3", r"B:\\Kathana\\Kathana3.2", r"B:\\Kathana\\Kathana4", r"B:\\Kathana\\Kathana5.2", r"B:\\Kathana\\Kathana6"]
+KATHANA_DISPLAY_NAMES = ["Kathana Global", "Kathana 2", "Kathana 3", "Kathana 3.2", "Kathana 4", "Kathana 5.2",
+                         "Kathana 6"]
+KATHANA_VERSIONS = [r"B:\\Kathana\\Kathana-Global", r"B:\\Kathana\\Kathana2", r"B\\Kathana\\Kathana3",
+                    r"B\\Kathana\\Kathana3.2", r"B\\Kathana\\Kathana4", r"B\\Kathana\\Kathana5.2",
+                    r"B\\Kathana\\Kathana6"]
 
-LOG_XLSX_FILENAME = "KathanaLogs.xlsx"
+LOG_XLSX_FILENAME = "KATHANA_LOGS.xlsx"
 LOG_XLSX_PATH = os.path.join(os.getcwd(), LOG_XLSX_FILENAME)
 ENTITY_XLSX_PATH = r"B:\\Kathana\\Kathana_Entity_PS.xlsx"
 NOESIS_EXE_PATH = r"B:\\Kathana\\_Noesis\\Noesis.exe"
@@ -181,11 +176,14 @@ def generate_fbx_files(version_path, entity_type, generate_batch_only=False, com
     logger.debug(f"Generating FBX files for {entity_type} from {version_path}")
     logger.info(f"Generating {entity_type} FBX files from {version_path}...")
 
-    root_dir = os.path.join(r"B:\\Kathana-Out\\Sorted", os.path.basename(version_path), entity_type)
-    fbx_base_dir = os.path.join(r"B:\\Kathana-Out\\FBX", os.path.basename(version_path), entity_type)
+    root_dir = os.path.join(r"B\\Kathana-Out\\Sorted", os.path.basename(version_path), entity_type)
+    fbx_base_dir = os.path.join(r"B\\Kathana-Out\\FBX", os.path.basename(version_path), entity_type)
     ensure_directory_exists(fbx_base_dir)
 
-    if combined_batch:
+    batch_file_path = os.path.join(root_dir, f"generate_{entity_type.lower()}_fbx.bat")
+    ensure_directory_exists(os.path.dirname(batch_file_path))
+
+    with open(batch_file_path, 'w') as batch_file:
         for root, dirs, files in os.walk(root_dir):
             for file in files:
                 if file.endswith(".tmb"):
@@ -193,43 +191,37 @@ def generate_fbx_files(version_path, entity_type, generate_batch_only=False, com
                     tab_files = [f for f in files if f.endswith(".tab")]
                     for tab_file in tab_files:
                         tab_path = os.path.join(root, tab_file)
-                        output_file = os.path.join(fbx_base_dir, os.path.relpath(tab_path, root_dir)).replace(".tab", ".fbx")
+                        output_file = os.path.join(fbx_base_dir, os.path.relpath(tab_path, root_dir)).replace(
+                            ".tab", ".fbx"
+                        )
                         ensure_directory_exists(os.path.dirname(output_file))
                         command = f'"{NOESIS_EXE_PATH}" ?cmode "{tmb_path}" "{output_file}" -loadanimsingle "{tab_path}" -export -bakeanimscale -showstats -animbonenamematch -fbxnoextraframe'
-                        batch_commands.append(command)
-    else:
-        batch_file_path = os.path.join(root_dir, f"generate_{entity_type.lower()}_fbx.bat")
+                        batch_file.write(command + '\n')
 
-        # Ensure the directory for the batch file exists
-        ensure_directory_exists(os.path.dirname(batch_file_path))
-
-        with open(batch_file_path, 'w') as batch_file:
-            for root, dirs, files in os.walk(root_dir):
-                for file in files:
-                    if file.endswith(".tmb"):
-                        tmb_path = os.path.join(root, file)
-                        tab_files = [f for f in files if f.endswith(".tab")]
-                        for tab_file in tab_files:
-                            tab_path = os.path.join(root, tab_file)
-                            output_file = os.path.join(fbx_base_dir, os.path.relpath(tab_path, root_dir)).replace(".tab", ".fbx")
-                            ensure_directory_exists(os.path.dirname(output_file))
-                            command = f'"{NOESIS_EXE_PATH}" ?cmode "{tmb_path}" "{output_file}" -loadanimsingle "{tab_path}" -bakeanimscale -fbxnoextraframe'
-                            batch_file.write(command + '\n')
-
-        logger.info(f"Batch script for generating {entity_type} FBX files created at {batch_file_path}")
-        if not generate_batch_only:
-            os.system(f'cmd /c "{batch_file_path}"')
-            logger.info(f"{entity_type} FBX files generation complete.")
+    logger.info(f"Batch script for generating {entity_type} FBX files created at {batch_file_path}")
+    if not generate_batch_only:
+        os.system(f'cmd /c "{batch_file_path}"')
+        logger.info(f"{entity_type} FBX files generation complete.")
 
 def generate_combined_fbx_batch_file(version_path):
     """Generate a combined FBX batch file for all entity types."""
     logger.debug(f"Generating combined FBX batch file for {version_path}")
     batch_commands = []
-    generate_fbx_files(version_path, 'PC', generate_batch_only=True, combined_batch=True, batch_commands=batch_commands)
-    generate_fbx_files(version_path, 'NPC', generate_batch_only=True, combined_batch=True, batch_commands=batch_commands)
-    generate_fbx_files(version_path, 'Monster', generate_batch_only=True, combined_batch=True, batch_commands=batch_commands)
+    generate_fbx_files(
+        version_path, 'PC', generate_batch_only=True, combined_batch=True, batch_commands=batch_commands
+    )
+    generate_fbx_files(
+        version_path, 'NPC', generate_batch_only=True, combined_batch=True, batch_commands=batch_commands
+    )
+    generate_fbx_files(
+        version_path, 'Monster', generate_batch_only=True, combined_batch=True, batch_commands=batch_commands
+    )
 
-    combined_batch_file_path = os.path.join(r"B:\\Kathana-Out\\Sorted", os.path.basename(version_path), "generate_all_fbx.bat")
+    combined_batch_file_path = os.path.join(
+        r"B\\Kathana-Out\\Sorted", os.path.basename(version_path), "generate_all_fbx.bat"
+    )
+
+    ensure_directory_exists(os.path.dirname(combined_batch_file_path))
 
     with open(combined_batch_file_path, 'w') as batch_file:
         for command in batch_commands:
@@ -240,18 +232,18 @@ def generate_combined_fbx_batch_file(version_path):
 def clean_up():
     """Clean up the generated files and directories."""
     logger.debug("Starting clean up process")
-    sorted_path = r"B:\\Kathana-Out\\Sorted"
-    fbx_path = r"B:\\Kathana-Out\\FBX"
+    sorted_path = r"B\\Kathana-Out\\Sorted"
+    fbx_path = r"B\\Kathana-Out\\FBX"
     if os.path.exists(sorted_path):
         shutil.rmtree(sorted_path)
-        logger.info("Cleaned up the Sorted Res Out folder")
+        logger.info("Cleaned up the kathana-res-sorted folder")
     else:
-        logger.info("Sorted Res Out folder does not exist")
+        logger.info("kathana-res-sorted folder does not exist")
     if os.path.exists(fbx_path):
         shutil.rmtree(fbx_path)
-        logger.info("Cleaned up the FBX Out folder")
+        logger.info("Cleaned up the kathana-res-fbx folder")
     else:
-        logger.info("FBX Out folder des not exist")
+        logger.info("kathana-res-fbx folder does not exist")
 
 class Worker(QThread):
     """Worker thread to handle tasks in the background."""
@@ -272,6 +264,49 @@ class Worker(QThread):
         except Exception as e:
             self.error.emit(str(e))
         self.finished.emit()
+
+class ArrowButton(QPushButton):
+    """Custom button to display an arrow pointing left or right with sound effects."""
+    def __init__(self, direction, hover_sound, click_sound, parent=None):
+        super().__init__(parent)
+        self.direction = direction
+        self.hover_sound = hover_sound
+        self.click_sound = click_sound
+        self.setFixedSize(30, 30)
+        self.setStyleSheet("background-color: transparent; border: none;")
+
+        # Load sounds
+        try:
+            self.hover_sound_effect = pygame.mixer.Sound(self.hover_sound)
+            self.click_sound_effect = pygame.mixer.Sound(self.click_sound)
+        except pygame.error as e:
+            logger.error(f"Error loading sound: {e}")
+            self.hover_sound_effect = None
+            self.click_sound_effect = None
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(QColor("red"))
+        painter.setPen(Qt.PenStyle.NoPen)
+
+        if self.direction == "left":
+            points = [QPoint(self.width(), 0), QPoint(0, self.height() // 2), QPoint(self.width(), self.height())]
+        elif self.direction == "right":
+            points = [QPoint(0, 0), QPoint(self.width(), self.height() // 2), QPoint(0, self.height())]
+
+        triangle = QPolygon(points)
+        painter.drawPolygon(triangle)
+
+    def enterEvent(self, event):
+        if self.hover_sound_effect:
+            self.hover_sound_effect.play()
+        super().enterEvent(event)
+
+    def mousePressEvent(self, event):
+        if self.click_sound_effect:
+            self.click_sound_effect.play()
+        super().mousePressEvent(event)
 
 class SoundButton(QPushButton):
     """Custom button with sound effects and rounded corners."""
@@ -298,15 +333,11 @@ class SoundButton(QPushButton):
         """)
 
         # Load sounds
-        if pygame_initialized:
-            try:
-                self.hover_sound_effect = pygame.mixer.Sound(self.hover_sound)
-                self.click_sound_effect = pygame.mixer.Sound(self.click_sound)
-            except pygame.error as e:
-                logger.error(f"Error loading sound: {e}")
-                self.hover_sound_effect = None
-                self.click_sound_effect = None
-        else:
+        try:
+            self.hover_sound_effect = pygame.mixer.Sound(self.hover_sound)
+            self.click_sound_effect = pygame.mixer.Sound(self.click_sound)
+        except pygame.error as e:
+            logger.error(f"Error loading sound: {e}")
             self.hover_sound_effect = None
             self.click_sound_effect = None
 
@@ -336,7 +367,10 @@ class KathanaVersionTool(QWidget):
 
     def __init__(self):
         super().__init__()
+        self.selected_index = 0
+        self.selected_version = KATHANA_VERSIONS[self.selected_index]
         self.process = QProcess(self)
+        self.version_set = False
         self.initUI()
 
         self.logger = logging.getLogger()
@@ -347,11 +381,7 @@ class KathanaVersionTool(QWidget):
         self.append_log.connect(self.append_output)
 
         # Play startup sound
-        if pygame_initialized:
-            try:
-                pygame.mixer.Sound(startup_sound).play()
-            except pygame.error as e:
-                logger.error(f"Error playing startup sound: {e}")
+        pygame.mixer.Sound(startup_sound).play()
 
     def initUI(self):
         """Initialize the user interface."""
@@ -370,21 +400,75 @@ class KathanaVersionTool(QWidget):
         self.banner_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         layout.addWidget(self.banner_label)
 
-        self.tab_widget = QTabWidget()
-        for version_name, version_path in zip(KATHANA_DISPLAY_NAMES, KATHANA_VERSIONS):
-            tab = self.create_version_tab(version_name, version_path)
-            self.tab_widget.addTab(tab, version_name)
-        layout.addWidget(self.tab_widget)
+        version_selector_layout = QHBoxLayout()
+        version_selector_layout.addSpacerItem(QSpacerItem(30, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum))
+
+        left_arrow_btn = ArrowButton("left", hover_sound, click_sound, self)
+        left_arrow_btn.clicked.connect(self.select_previous_version)
+        version_selector_layout.addWidget(left_arrow_btn, alignment=Qt.AlignmentFlag.AlignLeft)
+
+        self.selected_version_label = QLabel(KATHANA_DISPLAY_NAMES[self.selected_index])
+        self.selected_version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.selected_version_label.setFont(QFont("Dotum", 12, QFont.Weight.Bold))
+        palette = self.selected_version_label.palette()
+        palette.setColor(QPalette.ColorRole.WindowText, QColor("orange"))
+        self.selected_version_label.setPalette(palette)
+        version_selector_layout.addWidget(self.selected_version_label, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        right_arrow_btn = ArrowButton("right", hover_sound, click_sound, self)
+        right_arrow_btn.clicked.connect(self.select_next_version)
+        version_selector_layout.addWidget(right_arrow_btn, alignment=Qt.AlignmentFlag.AlignRight)
+
+        version_selector_layout.addSpacerItem(QSpacerItem(30, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum))
+        layout.addLayout(version_selector_layout)
+
+        button_layout = QHBoxLayout()
+
+        layout.addLayout(button_layout)
+
+        buttons_layout = QHBoxLayout()
+
+        col1_layout = QVBoxLayout()
+        self.add_button_row(
+            col1_layout, [('Copy and Sort PC Files', lambda: self.run_task('PC')),
+                          ('Copy and Sort NPC Files', lambda: self.run_task('NPC')),
+                          ('Copy and Sort Monster Files', lambda: self.run_task('Monster')),
+                          ('Copy and Sort All Entity Files', lambda: self.run_task('All'))]
+        )
+        buttons_layout.addLayout(col1_layout)
+
+        col2_layout = QVBoxLayout()
+        self.add_button_row(
+            col2_layout, [('Generate PC FBX Files', lambda: self.run_fbx_task('PC')),
+                          ('Generate NPC FBX Files', lambda: self.run_fbx_task('NPC')),
+                          ('Generate Monster FBX Files', lambda: self.run_fbx_task('Monster')),
+                          ('Generate All Entity FBX Files', lambda: self.run_fbx_task('All'))]
+        )
+        buttons_layout.addLayout(col2_layout)
+
+        col3_layout = QVBoxLayout()
+        self.add_button_row(
+            col3_layout, [('Generate PC FBX Batch File Only', lambda: self.run_fbx_task('PC', True)),
+                          ('Generate NPC FBX Batch File Only', lambda: self.run_fbx_task('NPC', True)),
+                          ('Generate Monster FBX Batch File Only', lambda: self.run_fbx_task('Monster', True)),
+                          ('Generate All FBX Batch File Only', self.run_combined_fbx_batch_file)]
+        )
+        buttons_layout.addLayout(col3_layout)
+
+        layout.addLayout(buttons_layout)
+
+        control_buttons_layout = QHBoxLayout()
+        self.add_button_row(
+            control_buttons_layout,
+            [('Clean Up', self.clean_up), ('Stop', self.stop_processes), ('Refresh', self.restart_application)]
+        )
+        layout.addLayout(control_buttons_layout)
 
         console_section_layout = QVBoxLayout()
 
         console_label = QLabel('Console')
         console_label.setFont(QFont("Dotum", 10, QFont.Weight.Bold))
         console_section_layout.addWidget(console_label)
-
-        self.progress_label = QLabel('')
-        self.progress_label.setFont(QFont("Dotum", 10))
-        console_section_layout.addWidget(self.progress_label)
 
         console_layout = QHBoxLayout()
 
@@ -423,7 +507,7 @@ class KathanaVersionTool(QWidget):
         author_version_layout = QHBoxLayout()
         author_label = QLabel('Ashesh Development © 2024')
         author_label.setFont(QFont("Dotum", 8))
-        version_label = QLabel('Version: 2.0.1')
+        version_label = QLabel('Version: 1.1.3')
         version_label.setFont(QFont("Dotum", 8))
         author_version_layout.addWidget(author_label)
         author_version_layout.addSpacerItem(QSpacerItem(40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum))
@@ -437,58 +521,9 @@ class KathanaVersionTool(QWidget):
         self.process.readyReadStandardError.connect(self.on_readyReadStandardError)
         self.process.finished.connect(self.on_task_finished)
 
-    def create_version_tab(self, version_name, version_path):
-        """Create a tab for a specific Kathana version."""
-        tab = QWidget()
-        layout = QVBoxLayout()
-
-        button_layout = QHBoxLayout()
-
-        col1_layout = QVBoxLayout()
-        self.add_button_row(
-            col1_layout, version_path,
-            [('Copy and Sort PC Files', 'PC'),
-             ('Copy and Sort NPC Files', 'NPC'),
-             ('Copy and Sort Monster Files', 'Monster'),
-             ('Copy and Sort All Entity Files', 'All')]
-        )
-        button_layout.addLayout(col1_layout)
-
-        col2_layout = QVBoxLayout()
-        self.add_button_row(
-            col2_layout, version_path,
-            [('Generate PC FBX Files', 'PC'),
-             ('Generate NPC FBX Files', 'NPC'),
-             ('Generate Monster FBX Files', 'Monster'),
-             ('Generate All Entity FBX Files', 'All')]
-        )
-        button_layout.addLayout(col2_layout)
-
-        col3_layout = QVBoxLayout()
-        self.add_button_row(
-            col3_layout, version_path,
-            [('Generate PC FBX Batch File Only', 'PC', True),
-             ('Generate NPC FBX Batch File Only', 'NPC', True),
-             ('Generate Monster FBX Batch File Only', 'Monster', True),
-             ('Generate All FBX Batch File Only', None)]
-        )
-        button_layout.addLayout(col3_layout)
-
-        layout.addLayout(button_layout)
-
-        control_buttons_layout = QHBoxLayout()
-        self.add_button_row(
-            control_buttons_layout, None,
-            [('Clean Up', None), ('Stop', None), ('Refresh', None)]
-        )
-        layout.addLayout(control_buttons_layout)
-
-        tab.setLayout(layout)
-        return tab
-
-    def add_button_row(self, parent_layout, version_path, buttons):
+    def add_button_row(self, parent_layout, buttons):
         """Add a row of buttons to the specified layout."""
-        for label, entity_type, *batch_only in buttons:
+        for label, callback in buttons:
             if label == 'Clean Up':
                 button = SoundButton(label, hover_sound, click_sound)
                 button.clicked.connect(self.confirm_clean_up)
@@ -509,15 +544,9 @@ class KathanaVersionTool(QWidget):
                         background-color: darkred;
                     }
                 """)
-            elif label == 'Stop':
-                button = SoundButton(label, hover_sound, click_sound)
-                button.clicked.connect(self.stop_processes)
-            elif label == 'Refresh':
-                button = SoundButton(label, hover_sound, click_sound)
-                button.clicked.connect(self.restart_application)
             else:
                 button = SoundButton(label, hover_sound, click_sound)
-                button.clicked.connect(lambda _, v=version_path, e=entity_type, b=batch_only: self.run_task(v, e, *b))
+                button.clicked.connect(callback)
             button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
             parent_layout.addWidget(button)
 
@@ -529,21 +558,64 @@ class KathanaVersionTool(QWidget):
         if reply == QMessageBox.StandardButton.Yes:
             self.clean_up()
 
-    def run_task(self, version_path, entity_type, generate_batch_only=False):
-        """Run a task to copy and sort files or generate FBX files."""
-        self.start_processing_sound()
-        if entity_type == 'All':
-            self.worker = Worker(copy_and_sort_all_files, version_path)
-        elif entity_type is None:
-            self.worker = Worker(generate_combined_fbx_batch_file, version_path)
-        elif generate_batch_only:
-            self.worker = Worker(generate_fbx_files, version_path, entity_type, generate_batch_only)
+    def update_selected_version(self):
+        """Update the selected Kathana version."""
+        self.selected_version = KATHANA_VERSIONS[self.selected_index]
+        self.selected_version_label.setText(KATHANA_DISPLAY_NAMES[self.selected_index])
+
+    def select_previous_version(self):
+        """Select the previous Kathana version in the list."""
+        self.selected_index = (self.selected_index - 1) % len(KATHANA_VERSIONS)
+        self.update_selected_version()
+
+    def select_next_version(self):
+        """Select the next Kathana version in the list."""
+        self.selected_index = (self.selected_index + 1) % len(KATHANA_VERSIONS)
+        self.update_selected_version()
+
+    def set_version(self):
+        """Set the selected Kathana version and log the action."""
+        self.version_set = True
+        self.append_output(f'Selected version set to: {KATHANA_DISPLAY_NAMES[self.selected_index]}')
+
+    def run_task(self, entity_type):
+        """Run a task to copy and sort files for the specified entity type."""
+        if self.selected_version:
+            self.start_processing_sound()
+            if entity_type == 'All':
+                self.worker = Worker(copy_and_sort_all_files, self.selected_version)
+            else:
+                self.worker = Worker(copy_and_sort_files, self.selected_version, entity_type)
+            self.worker.output.connect(self.append_output)
+            self.worker.error.connect(self.append_error)
+            self.worker.finished.connect(self.on_task_finished)
+            self.worker.start()
         else:
-            self.worker = Worker(copy_and_sort_files, version_path, entity_type)
-        self.worker.output.connect(self.append_output)
-        self.worker.error.connect(self.append_error)
-        self.worker.finished.connect(self.on_task_finished)
-        self.worker.start()
+            self.append_error('Error: Please choose a Kathana version first.')
+
+    def run_fbx_task(self, entity_type, generate_batch_only=False):
+        """Run a task to generate FBX files for the specified entity type."""
+        if self.selected_version:
+            self.start_processing_sound()
+            self.worker = Worker(generate_fbx_files, self.selected_version, entity_type, generate_batch_only)
+            self.worker.output.connect(self.append_output)
+            self.worker.error.connect(self.append_error)
+            self.worker.finished.connect(self.on_task_finished)
+            self.worker.start()
+        else:
+            self.append_error('Error: Please choose a Kathana version first.')
+
+    def run_combined_fbx_batch_file(self):
+        """Run a task to generate combined FBX batch files."""
+        if self.selected_version:
+            self.start_processing_sound()
+            self.worker = Worker(generate_combined_fbx_batch_file, self.selected_version)
+            self.worker.output.connect(self.append_output)
+            self.worker.error.connect(self.append_error)
+            self.worker.finished.connect(self.on_task_finished)
+            self.worker.start()
+        else:
+            self.append_error('Error: Please choose a Kathana version first.')
 
     def clean_up(self):
         """Run a task to clean up generated files."""
@@ -587,11 +659,7 @@ class KathanaVersionTool(QWidget):
         self.console_output.setTextColor(QColor("green"))
         self.console_output.append("Task Finished: The task has been completed successfully.")
         self.console_output.setTextColor(QColor("black"))
-        if pygame_initialized:
-            try:
-                pygame.mixer.Sound(done_sound).play()
-            except pygame.error as e:
-                logger.error(f"Error playing done sound: {e}")
+        pygame.mixer.Sound(done_sound).play()
 
     def on_readyReadStandardOutput(self):
         """Handle ready read standard output event."""
@@ -605,16 +673,11 @@ class KathanaVersionTool(QWidget):
 
     def start_processing_sound(self):
         """Start the processing sound."""
-        if pygame_initialized:
-            try:
-                pygame.mixer.Sound(processing_sound).play()
-            except pygame.error as e:
-                logger.error(f"Error playing processing sound: {e}")
+        pygame.mixer.Sound(processing_sound).play()
 
     def stop_processing_sound(self):
         """Stop the processing sound."""
-        if pygame_initialized:
-            pygame.mixer.stop()
+        pygame.mixer.stop()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
